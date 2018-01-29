@@ -20,22 +20,23 @@ class NAF(nn.Module):
     def __init__(self, dim_in, dim_act):
         super(NAF, self).__init__()
         self.fc1 = nn.Linear(dim_in, 64)
+        self.bn1 = nn.BatchNorm1d(64)
 
         self.fc_V = nn.Linear(64, 1)
         self.fc_mu= nn.Linear(64, dim_act)
         self.fc_L = nn.Linear(64, (dim_act)*dim_act)
 
-        self.relu = nn.ReLU()
+        self.relu = nn.LeakyReLU()
 
     def forward(self, obs, u):
         return self.q_value(obs)(u)
 
     def value(self, x):
-        x = self.relu(self.fc1(x))
+        x = self.relu(self.bn1(self.fc1(x)))
         return self.fc_V(x)
 
     def q_value(self, obs):
-        x = self.relu(self.fc1(obs))
+        x = self.relu(self.bn1(self.fc1(obs)))
 
         V = self.fc_V(x)[:, 0]
         L = self.fc_L(x).view(-1, 1, 1)
@@ -50,7 +51,7 @@ class NAF(nn.Module):
         return fn
 
     def q_max(self, x):
-        x = self.relu(self.fc1(x))
+        x = self.relu(self.bn1(self.fc1(x)))
         mean = self.fc_mu(x)
         return mean
 
@@ -172,3 +173,5 @@ for i_episode in range(num_episodes):
 
     if i_episode % 100 == 0:
         print('i_episode: {}, reward: {}'.format(i_episode, episode_rewards))
+
+torch.save(model.parameters(), 'model.pth')
