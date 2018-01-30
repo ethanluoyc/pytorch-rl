@@ -28,6 +28,9 @@ class NAF(nn.Module):
 
         self.relu = nn.LeakyReLU()
 
+        self.diag_mask = Variable(torch.eye(dim_act))
+        self.tril_mask = Variable(torch.ones(dim_act, dim_act)).tril(-1)
+
     def forward(self, obs, u):
         return self.q_value(obs)(u)
 
@@ -39,7 +42,9 @@ class NAF(nn.Module):
         x = self.relu(self.bn1(self.fc1(obs)))
 
         V = self.fc_V(x)[:, 0]
-        L = self.fc_L(x).view(-1, 1, 1)
+        LL = self.fc_L(x).view(-1, 1, 1)
+        L = ((LL * self.diag_mask.expand_as(LL)).exp()
+             + LL * self.tril_mask.expand_as(LL)) # lower triangular part
         mean = self.fc_mu(x)
         P = torch.bmm(L, L)
 
