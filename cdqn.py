@@ -10,173 +10,200 @@ from replay import Transition, ReplayMemory
 import gym
 import math
 import itertools
+from ounoise import OUNoise
 
+
+def soft_update(target, source, tau):
+    for target_param, param in zip(target.parameters(), source.parameters()):
+        target_param.data.copy_(target_param.data * (1.0 - tau) + param.data * tau)
+
+
+class Policy(nn.Module):
+    def __init__(self, dim_in, dim_act):
+        super(Policy, self).__init__()
+
+        hidden_size = 128
+        self.bn0 = nn.BatchNorm1d(dim_in)
+        self.bn0.weight.data.fill_(1)
+        self.bn0.bias.data.fill_(0)
+
+        self.linear1 = nn.Linear(dim_in, hidden_size)
+        self.bn1 = nn.BatchNorm1d(hidden_size)
+        self.bn1.weight.data.fill_(1)
+        self.bn1.bias.data.fill_(0)
+
+        self.linear2 = nn.Linear(hidden_size, hidden_size)
+        self.bn2 = nn.BatchNorm1d(hidden_size)
+        self.bn2.weight.data.fill_(1)
+        self.bn2.bias.data.fill_(0)
+
+        self.V = nn.Linear(hidden_size, 1)
+        self.V.weight.data.mul_(0.1)
+        self.V.bias.data.mul_(0.1)
+
+        self.mu = nn.Linear(hidden_size, dim_act)
+        self.mu.weight.data.mul_(0.1)
+        self.mu.bias.data.mul_(0.1)
+
+        self.L = nn.Linear(hidden_size, dim_act ** 2)
+        self.L.weight.data.mul_(0.1)
+        self.L.bias.data.mul_(0.1)
+
+        self.tril_mask = Variable(torch.tril(torch.ones(
+            dim_act, dim_act), diagonal=-1).unsqueeze(0))
+        self.diag_mask = Variable(torch.diag(torch.diag(
+            torch.ones(dim_act, dim_act))).unsqueeze(0))
+
+    def forward(self, inputs):
+        x, u = inputs
+        x = self.bn0(x)
+        x = F.leaky_relu(self.bn1(self.linear1(x)))
+        x = F.leaky_relu(self.bn2(self.linear2(x)))
+
+        V = self.V(x)
+        mu = F.leaky_relu(self.mu(x))
+
+        Q = None
+        if u is not None:
+            num_outputs = mu.size(1)
+            L = self.L(x).view(-1, num_outputs, num_outputs)
+            L = L * \
+                self.tril_mask.expand_as(
+                    L) + torch.exp(L) * self.diag_mask.expand_as(L)
+            P = torch.bmm(L, L.transpose(2, 1))
+
+            u_mu = (u - mu).unsqueeze(2)
+            A = -0.5 * \
+                torch.bmm(torch.bmm(u_mu.transpose(2, 1), P), u_mu)[:, :, 0]
+
+            Q = A + V
+
+        return mu, Q, V
+
+
+DEFAULT_CONFIG = {
+    'batch_size': 128,
+    'gamma': 0.99,
+    'eps_start': 0.9,
+    'eps_end': 0.05,
+    'eps_decay': 200,
+    'clip_grad': 1,
+    'tau': 0.001,
+    'noise_scale': 0.3,
+    'exploration_end': 100,
+    'final_noise_scale': 0.3,
+}
+
+
+class NormalizedActions(gym.ActionWrapper):
+    def _action(self, action):
+        action = (action + 1) / 2  # [-1, 1] => [0, 1]
+        action *= (self.action_space.high - self.action_space.low)
+        action += self.action_space.low
+        return action
+
+    def _reverse_action(self, action):
+        action -= self.action_space.low
+        action /= (self.action_space.high - self.action_space.low)
+        action = action * 2 - 1
+        return action
+
+
+class NAF(object):
+    def __init__(self):
+        self.model = Policy(env.observation_space.shape[0], env.action_space.shape[0])
+        self.target_model = Policy(env.observation_space.shape[0], env.action_space.shape[0])
+        self.target_model.load_state_dict(self.model.state_dict())
+        self.optimizer = optim.Adam(self.model.parameters(), lr=1e-3)
+
+    def select_action(self, state, noise):
+        self.model.eval()
+        # action = self.model.q_max(Variable(state.unsqueeze(0), requires_grad=False).float())
+        action, _, _ = self.model((Variable(state, requires_grad=False).unsqueeze(0), None))
+        action = action[0]
+        action += Variable(torch.from_numpy(noise.noise()), requires_grad=False).float()
+        self.model.train()
+        return torch.clamp(action, -1, 1).data
+
+    def update_parameters(self, batch):
+        self.model.train()
+        state_batch = Variable(torch.stack(batch.state, 0))
+        next_state_batch = Variable(torch.stack(batch.next_state, 0), requires_grad=False)
+        action_batch = Variable(torch.cat(batch.action)).view(-1, 1)
+        reward_batch = Variable(torch.cat(batch.reward))
+        mask_batch = Variable(torch.cat(torch.FloatTensor([[1.0] if not d else [0.0] for d in batch.done])))
+
+        _, _, next_state_values = self.target_model((next_state_batch, None))
+
+        reward_batch = (torch.unsqueeze(reward_batch, 1))
+
+        # expected_state_action_values = reward_batch + (next_state_values * self.gamma)
+        expected_state_action_values = reward_batch + (next_state_values * config['gamma']) * mask_batch.view(-1, 1)
+
+        expected_state_action_values = expected_state_action_values.detach()
+
+        _, state_action_values, _ = self.model((state_batch, action_batch))
+
+        loss = nn.MSELoss()(state_action_values, expected_state_action_values)
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm(self.model.parameters(), 1)
+        self.optimizer.step()
+
+        soft_update(self.target_model, self.model, config['tau'])
 
 env = gym.make('Pendulum-v0')
-use_cuda = False
 
-# TODO exponentiate the diagonal
-class NAF(nn.Module):
-    def __init__(self, dim_in, dim_act):
-        super(NAF, self).__init__()
-        self.fc1 = nn.Linear(dim_in, 64)
-        self.bn1 = nn.BatchNorm1d(64)
+config = DEFAULT_CONFIG.copy()
 
-        self.fc_V = nn.Linear(64, 1)
-        self.fc_mu= nn.Linear(64, dim_act)
-        self.fc_L = nn.Linear(64, (dim_act)*dim_act)
+memory = ReplayMemory(10000000)
+ounoise = OUNoise(env.action_space.shape[0])
 
-        self.relu = nn.LeakyReLU()
+env = NormalizedActions(env)
+env.seed(4)
+torch.manual_seed(4)
+np.random.seed(4)
 
-        self.diag_mask = Variable(torch.eye(dim_act))
-        self.tril_mask = Variable(torch.ones(dim_act, dim_act)).tril(-1)
+naf = NAF()
 
-    def forward(self, obs, u):
-        return self.q_value(obs)(u)
-
-    def value(self, x):
-        x = self.relu(self.bn1(self.fc1(x)))
-        return self.fc_V(x)
-
-    def q_value(self, obs):
-        x = self.relu(self.bn1(self.fc1(obs)))
-
-        V = self.fc_V(x)[:, 0]
-        LL = self.fc_L(x).view(-1, 1, 1)
-        L = ((LL * self.diag_mask.expand_as(LL)).exp()
-             + LL * self.tril_mask.expand_as(LL)) # lower triangular part
-        mean = self.fc_mu(x)
-        P = torch.bmm(L, L)
-
-        def fn(u):
-            umean = (u - mean)  # (u - \mu)
-            A = -.5 * (umean * ((P @ umean.unsqueeze(2)).squeeze(2))).sum(dim=1)
-            Q = A + V
-            return Q
-        return fn
-
-    def q_max(self, x):
-        x = self.relu(self.bn1(self.fc1(x)))
-        mean = self.fc_mu(x)
-        return mean
-
-
-BATCH_SIZE = 128
-GAMMA = 0.999
-EPS_START = 0.9
-EPS_END = 0.05
-EPS_DECAY = 200
-
-model = NAF(env.observation_space.shape[0], env.action_space.shape[0])
-
-if use_cuda:
-    model.cuda()
-
-optimizer = optim.RMSprop(model.parameters())
-memory = ReplayMemory(10000)
-
-steps_done = 0
-
-def select_action(state):
-    model.eval()
-    global steps_done
-    sample = random.random()
-    eps_threshold = EPS_END + (EPS_START - EPS_END) * \
-        math.exp(-1. * steps_done / EPS_DECAY)
-    steps_done += 1
-    if sample > eps_threshold:
-        return model.q_max(
-            Variable(state.unsqueeze(0), volatile=True).float()).data.view(1, 1)
-    else:
-        return torch.from_numpy(np.array([env.action_space.sample()]))
-
-episode_durations = []
-
-
-def optimize_model():
-    model.train()
-    if len(memory) < BATCH_SIZE:
-        return
-    transitions = memory.sample(BATCH_SIZE)
-    # Transpose the batch (see http://stackoverflow.com/a/19343/3343043 for
-    # detailed explanation).
-    batch = Transition(*zip(*transitions))
-
-    # Compute a mask of non-final states and concatenate the batch elements
-    non_final_mask = torch.ByteTensor(tuple(map(lambda s: s is not None, batch.next_state)))
-    # We don't want to backprop through the expected action values and volatile
-    # will save us on temporarily changing the model parameters'
-    # requires_grad to False!
-    non_final_next_states = Variable(torch.stack([s for s in batch.next_state
-                                                  if s is not None], 0),
-                                     volatile=True)
-
-    state_batch = Variable(torch.stack(batch.state, 0))
-    action_batch = Variable(torch.cat(batch.action))
-    reward_batch = Variable(torch.cat(batch.reward))
-
-    # Compute Q(s_t, a) - the model computes Q(s_t), then we select the
-    # columns of actions taken
-    # print(state_batch.size())
-    state_action_values = model.q_value(state_batch)(action_batch)
-
-    # Compute V(s_{t+1}) for all next states.
-    next_state_values = Variable(torch.zeros(state_batch.size()[0]).type(torch.FloatTensor))
-    next_state_values[non_final_mask] = model.q_max(non_final_next_states)
-
-    next_state_values.volatile = False
-    # Compute the expected Q values
-    expected_state_action_values = (next_state_values * GAMMA) + reward_batch
-
-    # Compute Huber loss
-    # print(state_action_values.size(), expected_state_action_values.size())
-    loss = F.smooth_l1_loss(state_action_values, expected_state_action_values)
-
-    # Optimize the model
-    optimizer.zero_grad()
-    loss.backward()
-    for param in model.parameters():
-        param.grad.data.clamp_(-1, 1)
-    optimizer.step()
-
-env.seed(42)
-env.reset()
-
-
+noise_scale = 0.3
+exploration_end = 100
+final_noise_scale = 0.3
 num_episodes = 1000
+
 for i_episode in range(num_episodes):
-    # Initialize the environment and state
     obs = torch.FloatTensor(env.reset())
-    state = obs
+    ounoise.scale = (noise_scale - final_noise_scale) * max(0, exploration_end -
+                                                            i_episode) / exploration_end + final_noise_scale
+    ounoise.reset()
     episode_rewards = 0
-    for t in itertools.count():
+    for t in range(1000):
         # Select and perform an action
-        action = select_action(state)
-        env.render()
-        obs, reward, done, _ = env.step(action[0].numpy())
-        obs = torch.FloatTensor(obs)
+        action = naf.select_action(obs, noise=ounoise)
+        # env.render()
+        next_obs, reward, done, _ = env.step(action[0])
+
+        next_obs = torch.FloatTensor(next_obs)
         episode_rewards += reward
         reward = torch.FloatTensor([reward])
 
-        # Observe new state
-        if not done:
-            next_state = obs
-        else:
-            next_state = None
-
         # Store the transition in memory
-        memory.push(state, action, next_state, reward)
+        memory.push(obs, action, next_obs, done, reward)
 
         # Move to the next state
-        state = next_state
+        obs = next_obs
 
-        # Perform one step of the optimization (on the target network)
-        optimize_model()
+        # Perform one step of the optimization
+        if len(memory) > config['batch_size'] * 5:
+            for _ in range(5):
+                batch = memory.sample(config['batch_size'])
+                naf.update_parameters(batch)
+
         if done:
-            episode_durations.append(t + 1)
             break
 
-    if i_episode % 100 == 0:
-        print('i_episode: {}, reward: {}'.format(i_episode, episode_rewards))
+    # if i_episode % 20 == 0:
+    print('i_episode: {}, reward: {}'.format(i_episode, episode_rewards))
 
-torch.save(model.parameters(), 'model.pth')
+torch.save(naf.model.parameters(), 'model.pth')
