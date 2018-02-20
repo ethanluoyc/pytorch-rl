@@ -1,16 +1,12 @@
-import torch
 from torch import nn
 import numpy as np
 import torch.nn.functional as F
-import random
 import torch
 import torch.optim as optim
 from torch.autograd import Variable
-from replay import Transition, ReplayMemory
+from rl.replay import ReplayMemory
 import gym
-import math
-import itertools
-from ounoise import OUNoise
+from rl.ounoise import OUNoise
 
 
 def soft_update(target, source, tau):
