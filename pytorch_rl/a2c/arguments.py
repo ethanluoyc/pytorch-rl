@@ -22,7 +22,7 @@ DEFAULT_CONFIG = {
     # random seed
     'seed': 1,
     # how many training CPU processes to use
-    'num_processes': 4,
+    'num_processes': 16,
     # number of forward steps in A2C
     'num_steps': 5,
     # number of ppo epochs

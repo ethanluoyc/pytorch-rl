@@ -20,7 +20,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from gym import spaces
-from torch.autograd import Variable
 
 
 def build_model(envs, args):
@@ -68,10 +67,11 @@ def _evaluate(self, parameters, args):
 
     episode_reward = 0
     while True:
-        value, action, _, states = actor_critic.act(Variable(current_obs, volatile=True),
-                                                    Variable(states, volatile=True),
-                                                    Variable(masks, volatile=True),
-                                                    deterministic=True)
+        with torch.no_grad():
+            value, action, _, states = actor_critic.act(current_obs,
+                                                        states,
+                                                        masks,
+                                                        deterministic=True)
         states = states.data
         cpu_actions = np.atleast_2d(action.data.squeeze(1).cpu().numpy())
         # Obser reward and next obs
@@ -160,11 +160,12 @@ class A2C(object):
         for j in itr:
             for step in range(args.num_steps):
                 # Sample actions
-                value, action, action_log_prob, states = actor_critic.act(
-                    Variable(rollouts.observations[step], requires_grad=False),
-                    Variable(rollouts.states[step], requires_grad=False),
-                    Variable(rollouts.masks[step], requires_grad=False))
-                cpu_actions = np.reshape(action.data.squeeze(1).cpu().numpy(), (-1, 1))
+                with torch.no_grad():
+                    value, action, action_log_prob, states = actor_critic.act(
+                        rollouts.observations[step],
+                        rollouts.states[step],
+                        rollouts.masks[step])
+                cpu_actions = np.reshape(action.squeeze(1).cpu().numpy(), (-1, 1))
 
                 # Obser reward and next obs
                 obs, reward, done, info = env.step(cpu_actions)
@@ -187,25 +188,26 @@ class A2C(object):
 
                 self.observe(obs)
                 rollouts.insert(step, self.current_obs,
-                                states.data, action.data, action_log_prob.data, value.data, reward,
+                                states.data, action, action_log_prob, value, reward,
                                 masks)
 
-            next_value = actor_critic(Variable(rollouts.observations[-1], requires_grad=False),
-                                      Variable(rollouts.states[-1], requires_grad=False),
-                                      Variable(rollouts.masks[-1], requires_grad=False))[0].data
+            with torch.no_grad():
+                next_value = actor_critic(rollouts.observations[-1],
+                                          rollouts.states[-1],
+                                          rollouts.masks[-1])[0]
 
-            rollouts.compute_returns(next_value, args.use_gae, args.gamma, args.tau)
+                rollouts.compute_returns(next_value, args.use_gae, args.gamma, args.tau)
 
             values, action_log_probs, dist_entropy, states = actor_critic.evaluate_actions(
-                Variable(rollouts.observations[:-1].view(-1, *obs_shape)),
-                Variable(rollouts.states[0].view(-1, actor_critic.state_size)),
-                Variable(rollouts.masks[:-1].view(-1, 1)),
-                Variable(rollouts.actions.view(-1, action_shape)))
+                rollouts.observations[:-1].view(-1, *obs_shape),
+                rollouts.states[0].view(-1, actor_critic.state_size),
+                rollouts.masks[:-1].view(-1, 1),
+                rollouts.actions.view(-1, action_shape))
 
             values = values.view(args.num_steps, args.num_processes, 1)
             action_log_probs = action_log_probs.view(args.num_steps, args.num_processes, 1)
 
-            advantages = Variable(rollouts.returns[:-1]) - values
+            advantages = rollouts.returns[:-1] - values
             value_loss = advantages.pow(2).mean()
 
             # we do not backprop from advantages
@@ -253,6 +255,6 @@ class A2C(object):
                                int(total_num_steps / (end - start)),
                                final_rewards.mean()))
 
-                reporter.report(j, dict(value_loss=value_loss.data[0],
-                                        dist_entropy=dist_entropy.data[0],
+                reporter.report(j, dict(value_loss=value_loss.item(),
+                                        dist_entropy=dist_entropy.item(),
                                         final_rewards=final_rewards.mean()))

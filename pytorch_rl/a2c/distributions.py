@@ -4,7 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-from .utils import AddBias
+from utils import AddBias
+from torch import distributions
 
 
 class Categorical(nn.Module):
@@ -48,7 +49,7 @@ class DiagGaussian(nn.Module):
         action_mean = self.fc_mean(x)
 
         #  An ugly hack for my KFAC implementation.
-        zeros = Variable(torch.zeros(action_mean.size()), requires_grad=not x.volatile)
+        zeros = torch.zeros(action_mean.size())
         if x.is_cuda:
             zeros = zeros.cuda()
 
