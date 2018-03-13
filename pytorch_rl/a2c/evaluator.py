@@ -52,6 +52,26 @@ class Evaluator(object):
                     break
 
 
+class FnEvaluator(object):
+    def __init__(self, fn, opt):
+        self.fn = fn
+        self.opt = opt.copy()
+        self._q = mp.Queue()
+        self._worker = mp.Process(target=self._worker)
+
+    def start(self):
+        self._worker.start()
+
+    def push(self, params):
+        self._q.put(params)
+
+    def _worker(self):
+        while True:
+            parameters = self._q.get()
+            print('Got a new snapshot, evaluating it')
+            self.fn(parameters, self.opt)
+
+
 class _MockAgent(object):
     def __init__(self, ):
         self.observation = None

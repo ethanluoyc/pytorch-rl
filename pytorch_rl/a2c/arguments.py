@@ -42,7 +42,7 @@ DEFAULT_CONFIG = {
     # number of frames to train
     'num_frames': 10e6,
     # environment to train on
-    'env_name': 'PongNoFrameskip-v4',
+    'env_name': 'Pendulum-v0',
     # directory to save agent logs
     'log_dir': '/tmp/gym/',
     # directory to save agent logs
