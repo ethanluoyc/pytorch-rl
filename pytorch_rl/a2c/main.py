@@ -1,24 +1,27 @@
-import copy
-import glob
 import os
-import time
 import sys
 
-import numpy as np
-import torch
-import torch.nn as nn
-import torch.optim as optim
 from baselines.common.vec_env.dummy_vec_env import DummyVecEnv
 from baselines.common.vec_env.subproc_vec_env import SubprocVecEnv
 from baselines.common.vec_env.vec_normalize import VecNormalize
-from gym import spaces
-from torch.autograd import Variable
+
 from pytorch_rl.a2c.agent import A2C
 
 sys.path.append(os.path.dirname(__file__))
-
-from pytorch_rl.a2c.arguments import get_args
 from pytorch_rl.a2c.envs import make_env
+
+import torch
+from pytorch_rl.a2c.agent import DEFAULT_CONFIG
+
+
+def get_args():
+    from attrdict import AttrDict
+    args = AttrDict(DEFAULT_CONFIG)
+
+    args.cuda = not args.no_cuda and torch.cuda.is_available()
+    args.vis = not args.no_vis
+
+    return args
 
 
 def build_env(args):

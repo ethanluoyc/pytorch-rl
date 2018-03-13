@@ -29,13 +29,13 @@ class Categorical(nn.Module):
 
     def logprobs_and_entropy(self, x, actions):
         x = self(x)
-
-        log_probs = F.log_softmax(x, dim=1)
         probs = F.softmax(x, dim=1)
 
-        action_log_probs = log_probs.gather(1, actions)
+        cat = distributions.Categorical(probs)
 
-        dist_entropy = -(log_probs * probs).sum(-1).mean()
+        action_log_probs = cat.log_prob(actions)
+        dist_entropy = cat.entropy()
+
         return action_log_probs, dist_entropy
 
 
@@ -62,7 +62,7 @@ class DiagGaussian(nn.Module):
         action_std = action_logstd.exp()
 
         if deterministic is False:
-            noise = Variable(torch.randn(action_std.size()))
+            noise = torch.randn(action_std.size())
             if action_std.is_cuda:
                 noise = noise.cuda()
             action = action_mean + action_std * noise
