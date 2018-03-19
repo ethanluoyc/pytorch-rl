@@ -9,7 +9,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from pytorch_rl.replay import ReplayMemory
-from pytorch_rl.utils import soft_update
+from pytorch_rl.utils import soft_update, hard_update
 from attrdict import AttrDict
 import numpy as np
 
@@ -34,7 +34,10 @@ DEFAULT_CONFIG = AttrDict({
     'gamma': 0.999,
     'eps_start': 0.9,
     'eps_end': 0.05,
-    'eps_decay': 200
+    'eps_decay': 200,
+    'grad_norm': 1.,
+    'tau': 0.001,
+    'target_interval': 10
 })
 
 
@@ -72,48 +75,43 @@ class DQN(object):
             return
 
         batch = self.memory.sample(args.batch_size)
-        #  the batch (see http://stackoverflow.com/a/19343/3343043 for
-        # detailed explanation).
-
         # Compute a mask of non-final states and concatenate the batch elements
-        non_final_mask = torch.tensor(list(map(lambda s: s is not None,
-                                               batch.next_state))).byte()
-        # We don't want to backprop through the expected action values and volatile
-        # will save us on temporarily changing the model parameters'
-        # requires_grad to False!
-        non_final_next_states = torch.stack([s for s in batch.next_state if s is not None], 0)
+        non_final_mask = 1 - batch.done
 
-        state_batch = torch.stack(batch.state, 0)
-        action_batch = torch.cat(batch.action)
-        reward_batch = torch.cat(batch.reward)
+        state_batch = batch.state
+        action_batch = batch.action
+        reward_batch = batch.reward
+        next_state_batch = batch.next_state
+        non_final_next_states = next_state_batch[non_final_mask]
 
         # Compute Q(s_t, a) - the model computes Q(s_t), then we select the
         # columns of actions taken
         # Q(s, a)
-        state_action_values = self.model(state_batch).gather(1, action_batch)
+        state_action_values = self.model(state_batch).gather(1, action_batch).squeeze()
 
         # Compute V(s_{t+1}) for all next states.
-        next_state_values = torch.zeros(args.batch_size)
-
         next_action_batch = self.model(non_final_next_states).max(1)[1].unsqueeze(1)
         # next_state_values[non_final_mask] = self.target_model(non_final_next_states).max(1)[0]
-        next_state_values[non_final_mask] = self.target_model(non_final_next_states).gather(1,
-                                                                                            next_action_batch).squeeze()
+        next_state_values = torch.zeros(args.batch_size)
+        next_state_values[non_final_mask] = self.target_model(non_final_next_states) \
+            .gather(1, next_action_batch).squeeze()
         next_state_values.detach_()
 
         # Compute the expected Q values
-        expected_state_action_values = (next_state_values * args.gamma) + reward_batch
+        expected_state_action_values = next_state_values * args.gamma + reward_batch
 
         # Compute Huber loss
-        loss = F.smooth_l1_loss(state_action_values.squeeze(), expected_state_action_values)
+        loss = F.smooth_l1_loss(state_action_values, expected_state_action_values)
 
         # Optimize the model
         self.optimizer.zero_grad()
         loss.backward()
-        nn.utils.clip_grad_norm(self.model.parameters(), 1)
+        nn.utils.clip_grad_norm(self.model.parameters(), args.grad_norm)
         self.optimizer.step()
         self.steps_done += 1
-        soft_update(self.target_model, self.model, .9)
+
+        if self.steps_done % args.target_interval:
+            hard_update(self.target_model, self.model)
 
     def run(self, num_episodes=1000000):
         from torchnet.meter import AverageValueMeter
@@ -127,27 +125,19 @@ class DQN(object):
             episode_rewards = 0
             for t in count():
                 # Select and perform an action
-                action = self.act(obs.float())
+                action = self.act(obs)[0]
                 env.render()
 
-                next_obs, reward, done, _ = env.step(action[0, 0].item())
+                next_obs, reward, done, _ = env.step(action[0].item())
                 next_obs = torch.from_numpy(next_obs).float()
 
                 episode_rewards += reward
-                reward = torch.from_numpy(np.array([reward])).float()
-
-                if not done:
-                    next_obs = next_obs
-                else:
-                    next_obs = None
-
                 # Store the transition in memory
-                self.memory.push(obs, action, next_obs, done, reward)
+                self.memory.push(obs, action, next_obs, done, torch.FloatTensor([reward]))
 
                 # Move to the next state
                 obs = next_obs
 
-                # Perform one step of the optimization (on the target network)
                 self.optimize_model()
                 if done:
                     break
