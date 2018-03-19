@@ -8,9 +8,14 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from pytorch_rl.replay import Transition, ReplayMemory
+from pytorch_rl.replay import ReplayMemory
 from attrdict import AttrDict
 import numpy as np
+
+
+def soft_update(target, source, tau):
+    for target_param, param in zip(target.parameters(), source.parameters()):
+        target_param.data.copy_(target_param.data * (1.0 - tau) + param.data * tau)
 
 
 class _MLP(nn.Module):
@@ -43,6 +48,9 @@ class DQN(object):
         self.args = args
 
         self.model = _MLP()
+        self.target_model = _MLP()
+        self.target_model.load_state_dict(self.model.state_dict())
+
         self.optimizer = optim.RMSprop(self.model.parameters())
         self.memory = ReplayMemory(10000)
         self.steps_done = 0
@@ -85,11 +93,16 @@ class DQN(object):
 
         # Compute Q(s_t, a) - the model computes Q(s_t), then we select the
         # columns of actions taken
+        # Q(s, a)
         state_action_values = self.model(state_batch).gather(1, action_batch)
 
         # Compute V(s_{t+1}) for all next states.
         next_state_values = torch.zeros(args.BATCH_SIZE)
-        next_state_values[non_final_mask] = self.model(non_final_next_states).max(1)[0]
+
+        next_action_batch = self.model(non_final_next_states).max(1)[1].unsqueeze(1)
+        # next_state_values[non_final_mask] = self.target_model(non_final_next_states).max(1)[0]
+        next_state_values[non_final_mask] = self.target_model(non_final_next_states).gather(1,
+                                                                                            next_action_batch).squeeze()
         next_state_values.detach_()
 
         # Compute the expected Q values
@@ -104,9 +117,15 @@ class DQN(object):
         nn.utils.clip_grad_norm(self.model.parameters(), 1)
         self.optimizer.step()
         self.steps_done += 1
+        soft_update(self.target_model, self.model, .9)
 
     def run(self, num_episodes=1000000):
-        for i_episode in range(num_episodes):
+        from torchnet.meter import AverageValueMeter
+        from pytorch_rl.utils.progress_bar import json_progress_bar
+
+        reward_meter = AverageValueMeter()
+        progress_bar = json_progress_bar(range(num_episodes), prefix='training')
+        for i_episode in progress_bar:
             # Initialize the environment and state
             obs = torch.from_numpy(env.reset()).float()
             episode_rewards = 0
@@ -137,8 +156,16 @@ class DQN(object):
                 if done:
                     break
 
-            if i_episode % 100 == 0:
-                print('i_episode: {}, reward: {}'.format(i_episode, episode_rewards))
+            reward_meter.add(episode_rewards)
+            from collections import OrderedDict
+            stats = OrderedDict(episode=i_episode,
+                                reward=reward_meter)
+            progress_bar.log(stats)
+            if i_episode % 10 == 0:
+                progress_bar.print(stats)
+            # if i_episode % 10 == 0:
+            #     progress_bar.print('i_episode: {}, reward: {} (+/- {})'.format(i_episode, reward_meter.mean,
+            #                                                                    reward_meter.std))
 
 
 if __name__ == '__main__':
