@@ -7,11 +7,8 @@ from torch.autograd import Variable
 from pytorch_rl.replay import ReplayMemory
 from pytorch_rl.ounoise import OUNoise
 from pytorch_rl.wrappers import NormalizedActions
+from pytorch_rl.utils import soft_update
 
-
-def soft_update(target, source, tau):
-    for target_param, param in zip(target.parameters(), source.parameters()):
-        target_param.data.copy_(target_param.data * (1.0 - tau) + param.data * tau)
 
 class Policy(nn.Module):
     def __init__(self, dim_in, dim_act):
@@ -44,10 +41,11 @@ class Policy(nn.Module):
         self.L.weight.data.mul_(0.1)
         self.L.bias.data.mul_(0.1)
 
-        self.tril_mask = Variable(torch.tril(torch.ones(
-            dim_act, dim_act), diagonal=-1).unsqueeze(0))
-        self.diag_mask = Variable(torch.diag(torch.diag(
-            torch.ones(dim_act, dim_act))).unsqueeze(0))
+        self.tril_mask = torch.tril(torch.ones(
+            dim_act, dim_act), diagonal=-1).unsqueeze(0)
+
+        self.diag_mask = torch.diag(torch.diag(
+            torch.ones(dim_act, dim_act))).unsqueeze(0)
 
     def forward(self, inputs):
         x, u = inputs
@@ -84,11 +82,12 @@ DEFAULT_CONFIG = {
     'noise_scale': 0.3,
     'exploration_end': 100,
     'final_noise_scale': 0.3,
+    'grad_norm': 1
 }
 
 
 class NAF(object):
-    def __init__(self):
+    def __init__(self, env):
         self.model = Policy(env.observation_space.shape[0], env.action_space.shape[0])
         self.target_model = Policy(env.observation_space.shape[0], env.action_space.shape[0])
         self.target_model.load_state_dict(self.model.state_dict())
@@ -104,61 +103,54 @@ class NAF(object):
 
     def update_parameters(self, batch):
         self.model.train()
-        state_batch = Variable(torch.stack(batch.state, 0))
-        next_state_batch = Variable(torch.stack(batch.next_state, 0), requires_grad=False)
-        action_batch = Variable(torch.stack(batch.action))
-        reward_batch = Variable(torch.cat(batch.reward))
-        mask_batch = Variable(torch.cat(torch.FloatTensor([[1.0] if not d else [0.0] for d in batch.done])))
+        state_batch = batch.state
+        next_state_batch = batch.next_state
+        action_batch = batch.action
+        reward_batch = batch.reward
+        non_final_mask_batch = (1 - batch.done).float()
 
         _, _, next_state_values = self.target_model((next_state_batch, None))
 
-        reward_batch = (torch.unsqueeze(reward_batch, 1))
-
-        # expected_state_action_values = reward_batch + (next_state_values * self.gamma)
-        expected_state_action_values = reward_batch + (next_state_values * config['gamma']) * mask_batch.view(-1, 1)
+        expected_state_action_values = reward_batch + (next_state_values.squeeze() * config['gamma']) * non_final_mask_batch
 
         expected_state_action_values = expected_state_action_values.detach()
 
         _, state_action_values, _ = self.model((state_batch, action_batch))
 
-        loss = nn.MSELoss()(state_action_values, expected_state_action_values)
+        loss = nn.MSELoss()(state_action_values.squeeze(),
+                            expected_state_action_values.squeeze())
 
         self.optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm(self.model.parameters(), 1)
+        torch.nn.utils.clip_grad_norm(self.model.parameters(), config['grad_norm'])
         self.optimizer.step()
 
         soft_update(self.target_model, self.model, config['tau'])
 
 
 if __name__ == '__main__':
-    # env = gym.make('Pendulum-v0')
-    from pixel2torque.envs.reacher_my import ReacherBulletEnv
-    from gym.wrappers import TimeLimit, Monitor
-
-    env = ReacherBulletEnv()
-    env.spec = None
-    env = TimeLimit(env, max_episode_steps=200)
-
+    import gym
+    env = gym.make('Pendulum-v0')
     experiment_dir = 'experiments/naf-ReacherFixedTarget'
-    env = Monitor(env, experiment_dir, force=True)
+    env = NormalizedActions(env)
+    env.seed(4)
+
+    # env = Monitor(env, experiment_dir, force=True)
 
     config = DEFAULT_CONFIG.copy()
 
     memory = ReplayMemory(10000000)
     ounoise = OUNoise(env.action_space.shape[0])
 
-    env = NormalizedActions(env)
-    env.seed(4)
     torch.manual_seed(4)
     np.random.seed(4)
 
-    naf = NAF()
+    naf = NAF(env)
 
     noise_scale = config['noise_scale']
     exploration_end = config['exploration_end']
     final_noise_scale = config['final_noise_scale']
-    num_episodes = 1000
+    num_episodes = 100
 
     for i_episode in range(num_episodes):
         obs = torch.FloatTensor(env.reset())
@@ -169,7 +161,7 @@ if __name__ == '__main__':
         for t in range(1000):
             # Select and perform an action
             action = naf.select_action(obs, noise=ounoise)
-            # env.render()
+            env.render()
             next_obs, reward, done, _ = env.step(action.numpy())
 
             next_obs = torch.FloatTensor(next_obs)
