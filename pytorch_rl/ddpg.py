@@ -1,5 +1,3 @@
-import sys
-
 import torch
 import torch.nn as nn
 from torch.optim import Adam
@@ -8,19 +6,11 @@ import torch.nn.functional as F
 import numpy as np
 from pytorch_rl.ounoise import OUNoise
 from pytorch_rl.replay import ReplayMemory
-from pytorch_rl.cdqn import DEFAULT_CONFIG, NormalizedActions
+from pytorch_rl.cdqn import DEFAULT_CONFIG
+from pytorch_rl.utils import soft_update, hard_update
+from pytorch_rl.wrappers import NormalizedActions
 import gym
 
-
-MSELoss = nn.MSELoss()
-
-def soft_update(target, source, tau):
-    for target_param, param in zip(target.parameters(), source.parameters()):
-        target_param.data.copy_(target_param.data * (1.0 - tau) + param.data * tau)
-
-def hard_update(target, source):
-    for target_param, param in zip(target.parameters(), source.parameters()):
-        target_param.data.copy_(param.data)
 
 class Actor(nn.Module):
 
@@ -145,13 +135,13 @@ class DDPG(object):
 
         state_action_batch = self.critic(state_batch, action_batch)
 
-        value_loss = MSELoss(state_action_batch, expected_state_action_batch)
+        value_loss = nn.MSELoss()(state_action_batch, expected_state_action_batch)
         value_loss.backward()
         self.critic_optim.step()
 
         self.actor_optim.zero_grad()
 
-        policy_loss = -self.critic((state_batch),self.actor((state_batch)))
+        policy_loss = -self.critic(state_batch, self.actor(state_batch))
 
         policy_loss = policy_loss.mean()
         policy_loss.backward()
@@ -163,8 +153,6 @@ class DDPG(object):
 
 if __name__ == '__main__':
 
-    from pixel2torque.envs.reacher_my import ReacherBulletEnv
-    from gym.wrappers import TimeLimit, Monitor
     env = gym.make('Pendulum-v0')
     config = DEFAULT_CONFIG.copy()
 
@@ -194,7 +182,7 @@ if __name__ == '__main__':
         for t in range(1000):
             # Select and perform an action
             action = ddpg.select_action(obs, ounoise)
-            # env.render()
+            env.render()
             next_obs, reward, done, _ = env.step(action.numpy()[0])
 
             next_obs = torch.FloatTensor(next_obs)

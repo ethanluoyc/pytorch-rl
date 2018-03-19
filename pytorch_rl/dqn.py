@@ -9,13 +9,9 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from pytorch_rl.replay import ReplayMemory
+from pytorch_rl.utils import soft_update
 from attrdict import AttrDict
 import numpy as np
-
-
-def soft_update(target, source, tau):
-    for target_param, param in zip(target.parameters(), source.parameters()):
-        target_param.data.copy_(target_param.data * (1.0 - tau) + param.data * tau)
 
 
 class _MLP(nn.Module):
@@ -34,11 +30,11 @@ class _MLP(nn.Module):
 
 
 DEFAULT_CONFIG = AttrDict({
-    'BATCH_SIZE': 128,
-    'GAMMA': 0.999,
-    'EPS_START': 0.9,
-    'EPS_END': 0.05,
-    'EPS_DECAY': 200
+    'batch_size': 128,
+    'gamma': 0.999,
+    'eps_start': 0.9,
+    'eps_end': 0.05,
+    'eps_decay': 200
 })
 
 
@@ -61,8 +57,8 @@ class DQN(object):
 
         sample = random.random()
         args = self.args
-        eps_threshold = args.EPS_END + (args.EPS_START - args.EPS_END) * \
-                        math.exp(-1. * self.steps_done / args.EPS_DECAY)
+        eps_threshold = args.eps_end + (args.eps_start - args.eps_end) * \
+                        math.exp(-1. * self.steps_done / args.eps_decay)
         if sample > eps_threshold:
             return model(state.unsqueeze(0)).data.max(1)[1].view(1, 1)
         else:
@@ -72,10 +68,10 @@ class DQN(object):
         self.model.train()
         args = self.args
 
-        if len(self.memory) < args.BATCH_SIZE:
+        if len(self.memory) < args.batch_size:
             return
 
-        batch = self.memory.sample(args.BATCH_SIZE)
+        batch = self.memory.sample(args.batch_size)
         #  the batch (see http://stackoverflow.com/a/19343/3343043 for
         # detailed explanation).
 
@@ -97,7 +93,7 @@ class DQN(object):
         state_action_values = self.model(state_batch).gather(1, action_batch)
 
         # Compute V(s_{t+1}) for all next states.
-        next_state_values = torch.zeros(args.BATCH_SIZE)
+        next_state_values = torch.zeros(args.batch_size)
 
         next_action_batch = self.model(non_final_next_states).max(1)[1].unsqueeze(1)
         # next_state_values[non_final_mask] = self.target_model(non_final_next_states).max(1)[0]
@@ -106,7 +102,7 @@ class DQN(object):
         next_state_values.detach_()
 
         # Compute the expected Q values
-        expected_state_action_values = (next_state_values * args.GAMMA) + reward_batch
+        expected_state_action_values = (next_state_values * args.gamma) + reward_batch
 
         # Compute Huber loss
         loss = F.smooth_l1_loss(state_action_values.squeeze(), expected_state_action_values)
