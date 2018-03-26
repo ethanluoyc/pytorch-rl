@@ -15,13 +15,13 @@ import numpy as np
 
 
 class _MLP(nn.Module):
-    def __init__(self):
+    def __init__(self, dim_in, dim_act):
         super(_MLP, self).__init__()
-        self.fc1 = nn.Linear(4, 200)
+        self.fc1 = nn.Linear(dim_in, 200)
         self.bn1 = nn.BatchNorm1d(200)
         self.fc2 = nn.Linear(200, 200)
         self.bn2 = nn.BatchNorm1d(200)
-        self.head = nn.Linear(200, 2)
+        self.head = nn.Linear(200, dim_act)
 
     def forward(self, x):
         x = F.leaky_relu(self.bn1(self.fc1(x)))
@@ -46,8 +46,8 @@ class DQN(object):
         self.env = env
         self.args = args
 
-        self.model = _MLP()
-        self.target_model = _MLP()
+        self.model = _MLP(env.observation_space.shape[0], env.action_space.n)
+        self.target_model = _MLP(env.observation_space.shape[0], env.action_space.n)
         self.target_model.load_state_dict(self.model.state_dict())
 
         self.optimizer = optim.RMSprop(self.model.parameters())
