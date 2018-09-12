@@ -7,7 +7,7 @@ import torch
 from torch.autograd import Variable
 from baselines.common.vec_env.dummy_vec_env import DummyVecEnv
 from baselines.common.vec_env.vec_normalize import VecNormalize
-
+import pixel2torque.envs.reacher_my
 from envs import make_env
 
 
@@ -29,13 +29,13 @@ env = make_env(args.env_name, args.seed, 0, None)
 env = DummyVecEnv([env])
 env.reset()
 
-actor_critic, ob_rms = \
+actor_critic, _ = \
             torch.load(os.path.join(args.load_dir, args.env_name + ".pt"))
 
 
 if len(env.observation_space.shape) == 1:
     env = VecNormalize(env, ret=False)
-    env.ob_rms = ob_rms
+    # env.ob_rms = ob_rms
 
     # An ugly hack to remove updates
     def _obfilt(self, obs):

@@ -131,11 +131,11 @@ class NAF(object):
 if __name__ == '__main__':
     import gym
     env = gym.make('Pendulum-v0')
-    experiment_dir = 'experiments/naf-ReacherFixedTarget'
+    experiment_dir = 'experiments/Pendulum-v0'
     env = NormalizedActions(env)
     env.seed(4)
 
-    # env = Monitor(env, experiment_dir, force=True)
+    env = gym.wrappers.Monitor(env, experiment_dir, force=True)
 
     config = DEFAULT_CONFIG.copy()
 
@@ -150,7 +150,7 @@ if __name__ == '__main__':
     noise_scale = config['noise_scale']
     exploration_end = config['exploration_end']
     final_noise_scale = config['final_noise_scale']
-    num_episodes = 100
+    num_episodes = 1000
 
     for i_episode in range(num_episodes):
         obs = torch.FloatTensor(env.reset())

@@ -1,10 +1,8 @@
 import copy
-import glob
 import os
 import time
 import sys
 import tqdm
-import torch.multiprocessing as mp
 from baselines.common.vec_env.dummy_vec_env import DummyVecEnv
 
 from pytorch_rl.a2c.envs import make_env
@@ -12,7 +10,7 @@ from pytorch_rl.a2c.envs import make_env
 sys.path.append(os.path.dirname(__file__))
 from pytorch_rl.a2c.model import CNNPolicy, MLPPolicy
 from pytorch_rl.a2c.storage import RolloutStorage
-from pytorch_rl.reporter import Reporter
+from pytorch_rl.utils.reporter import Reporter
 from pytorch_rl.a2c.evaluator import FnEvaluator
 
 import numpy as np
@@ -63,11 +61,11 @@ DEFAULT_CONFIG = {
     # number of frames to train
     'num_frames': 10e6,
     # environment to train on
-    'env_name': 'Pendulum-v0',
+    'env_name': 'PongNoFrameskip-v4',
     # directory to save agent logs
     'log_dir': '/tmp/gym/',
     # directory to save agent logs
-    'save_dir': '../trained_models/',
+    'save_dir': './trained_models/',
     # disables CUDA training
     'no_cuda': False,
     # use a recurrent policy
@@ -180,8 +178,8 @@ class A2C(object):
         num_updates = int(args.num_frames) // args.num_steps // args.num_processes
 
         reporter = Reporter('./trained_models')
-        evaluator = FnEvaluator(_evaluate, args)
-        evaluator.start()
+        # evaluator = FnEvaluator(_evaluate, args)
+        # evaluator.start()
 
         obs_shape = env.observation_space.shape
         obs_shape = (obs_shape[0] * args.num_stack, *obs_shape[1:])

@@ -25,7 +25,7 @@ def get_args():
 
 
 def build_env(args):
-    envs = [make_env('Pendulum-v0', args.seed, i, args.log_dir)
+    envs = [make_env(args.env_name, args.seed, i, args.log_dir)
             for i in range(args.num_processes)]
 
     if args.num_processes > 1:
