@@ -129,7 +129,7 @@ def _evaluate(self, parameters, args):
         # Obser reward and next obs
         obs, reward, done, _ = env.step(cpu_actions)
 
-        # env.envs[0].render()
+        # _env.envs[0].render()
 
         episode_reward += reward
         masks.fill_(0.0 if done else 1.0)

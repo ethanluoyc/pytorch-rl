@@ -42,7 +42,7 @@ def build_env(args):
 def main():
     print("#######")
     print(
-        "WARNING: All rewards are clipped or normalized so you need to use a monitor (see env.py) or visdom plot to get true rewards")
+        "WARNING: All rewards are clipped or normalized so you need to use a monitor (see _env.py) or visdom plot to get true rewards")
     print("#######")
 
     args = get_args()

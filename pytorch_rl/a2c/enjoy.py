@@ -18,7 +18,7 @@ parser.add_argument('--num-stack', type=int, default=4,
                     help='number of frames to stack (default: 4)')
 parser.add_argument('--log-interval', type=int, default=10,
                     help='log interval, one log per n updates (default: 10)')
-parser.add_argument('--env-name', default='PongNoFrameskip-v4',
+parser.add_argument('--_env-name', default='PongNoFrameskip-v4',
                     help='environment to train on (default: PongNoFrameskip-v4)')
 parser.add_argument('--load-dir', default='./trained_models/',
                     help='directory to save agent logs (default: ./trained_models/)')
@@ -35,7 +35,7 @@ actor_critic, _ = \
 
 if len(env.observation_space.shape) == 1:
     env = VecNormalize(env, ret=False)
-    # env.ob_rms = ob_rms
+    # _env.ob_rms = ob_rms
 
     # An ugly hack to remove updates
     def _obfilt(self, obs):

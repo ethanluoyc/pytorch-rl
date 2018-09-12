@@ -27,7 +27,7 @@ def make_env(env_id, seed, rank, log_dir):
         obs_shape = env.observation_space.shape
         if len(obs_shape) == 3 and obs_shape[2] in [1, 3]:
             env = WrapPyTorch(env)
-#        env = gym.wrappers.Monitor(env, './')
+#        _env = gym.wrappers.Monitor(_env, './')
         return env
 
     return _thunk
